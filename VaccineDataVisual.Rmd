@@ -1,0 +1,150 @@
+---
+title: 'Vaccination Data Visual'
+author: "Nima Valibeigi"
+Date: "2022-10-26"
+output:
+  html_document:
+    df_print: paged
+  pdf_document:
+    latex_engine: xelatex
+urlcolor: blue
+fontsize: 12pt
+---
+
+
+### Data Exploration
+
+```{r}
+library(ggplot2)
+library(tidyverse) 
+library(dplyr)
+library(lubridate)
+
+weekly.allo.state <- read_csv("vaccine_full.csv") %>% select(State, Date, Pfizer.1st.Dose.Allocations, Pfizer.2nd.Dose.Allocations, Moderna.1st.Dose.Allocations, Moderna.2nd.Dose.Allocations, Janssen.1st.Dose.Allocations, All.Dose.Allocations)
+
+states <- IDDA::pop.state
+    
+weekly.allo.state <- left_join(weekly.allo.state, states, key = "State") %>%
+  mutate(DosePerPop = All.Dose.Allocations/population*1000) %>%
+  mutate(Date = mdy(Date)) 
+
+library(spatstat.utils)
+weekly.allo.state$Cum.Allocation <- ave((coalesce((weekly.allo.state$All.Dose.Allocations),0)),weekly.allo.state$State,FUN=revcumsum)
+
+
+```
+
+
+### Visualization
+
+
+#### Time Series Plots for State of Virginia
+
+```{r}
+library(plotly)
+library(lubridate)
+library(ggplot2)
+ts <- plot_ly(weekly.allo.state) %>% 
+  filter(State == 'Virginia') %>%
+  add_trace(x = ~Date, y = ~Pfizer.1st.Dose.Allocations, type = 'scatter', name = 'Pfizer 1st Dose', mode = 'markers+lines') %>%
+  add_trace(x = ~Date, y = ~Pfizer.2nd.Dose.Allocations, type = 'scatter', name = 'Pfizer 2nd Dose', mode = 'markers+lines') %>%
+  add_trace(x = ~Date, y = ~Moderna.1st.Dose.Allocations, type = 'scatter', name = 'Moderna 1st Dose', mode = 'markers+lines') %>%
+  add_trace(x = ~Date, y = ~Moderna.2nd.Dose.Allocations, type = 'scatter', name = 'Moderna 2nd Dose', mode = 'markers+lines') %>%
+  add_trace(x = ~Date, y = ~Janssen.1st.Dose.Allocations, type = 'scatter', name = 'J&J',  mode = 'markers+lines') 
+  
+ts %>%
+  layout(xaxis = list(title = "Date"), yaxis = list(title = "Number Allocated"), title ="Dose Allocation by Vaccine in VA") 
+```
+
+#### Time Series Plot for State of Virginia
+```{r}
+va <- weekly.allo.state %>%
+  filter(State == "Virginia") %>%
+  mutate(dosescum = rev(cumsum(rev(DosePerPop))))
+pb <- ggplot(data = va, aes(x = Date, y = dosescum )) + geom_line() +
+  scale_x_date(date_labels = "%Y-%m-%d")
+
+pb <- pb + 
+xlab('Date') +
+ylab('Total Doses of Vaccine per Population') +
+labs(title = 'Total Doses of Vaccine per Population Given in VA from 12-21-20 to 06-21-21')
+
+ggplotly(pb)
+```
+#### Time Series Plot for the entire US
+```{r}
+us <- weekly.allo.state %>%
+  distinct(Date, .keep_all = TRUE)
+us$dosescum <- rev(cumsum(us$DosePerPop))
+
+
+pc <- ggplot(data = us, aes(x = Date, y = dosescum)) + geom_line() +
+  scale_x_date(date_labels = "%Y-%m-%d")
+
+pc <- pc + 
+xlab('Date') +
+ylab('Total Doses of Vaccine per Population') +
+labs(title = 'Total Doses of Vaccine per Population Given in US from 12-21-20 to 06-21-21')
+
+ggplotly(pc)
+```
+
+
+
+#### Map
+
+```{r}
+library(geojsonio)
+library(leaflet)
+library(dplyr)
+library(IDDA)
+
+urlRemote  <- "https://raw.githubusercontent.com/"
+pathGithub <- "PublicaMundi/MappingAPI/master/data/geojson/"
+fileName   <- "us-states.json"
+
+library(spatstat.utils)
+
+us <- weekly.allo.state 
+us$dosescum <- rev(cumsum(us$DosePerPop))
+us$CumSum_dosescum_based_on_State<-ave((coalesce((us$DosePerPop),0)),us$State,FUN=revcumsum)
+us <- us %>%
+  filter(Date == "2021-03-01")
+  
+  
+
+df <- geojson_read(x = paste0(urlRemote, pathGithub, fileName),
+what = "sp")
+
+dff <- df
+dff@data <- df@data %>%
+mutate(name_ns = sapply(name, gsub, pattern = " ", replacement = ""))
+dff@data <- left_join(dff@data, us,
+by = c('name_ns' = 'State'))
+
+
+bins <- c(100, 125, 150, 155, 160, 165, 170, 175, 200)
+pal <- colorBin("YlOrRd", domain = dff$CumSum_dosescum_based_on_State, bins = bins)
+
+vacc_map00 <- leaflet(dff) %>%
+setView(-96, 37.8, 4, zoom = 4) %>%
+addTiles()
+
+
+labels_cases <- sprintf("Cumulative Dose Per Population: %g <br>",dff$CumSum_dosescum_based_on_State) %>%  
+  lapply(htmltools::HTML)
+
+vacc_map00 %>% addPolygons(
+fillColor = ~pal(CumSum_dosescum_based_on_State),
+weight = 1, opacity = 1,
+color = "white", dashArray = "3",
+fillOpacity = 0.9, layerId = ~name_ns, highlight = highlightOptions(weight = 5, color = "#666", dashArray = NULL, 
+                                     fillOpacity = 0.9, bringToFront = TRUE), label = labels_cases,
+        labelOptions = labelOptions(style = list("font-weight" = "normal", padding = "3px 8px"),
+          textsize = "15px", direction = "auto")) %>% addLegend(pal = pal, values = ~dff$CumSum_dosescum_based_on_State, title = "Cumulative Dose Per Population")
+```
+
+
+
+
+
